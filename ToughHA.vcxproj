@@ -93,6 +93,7 @@
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -109,6 +110,7 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -125,6 +127,7 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -141,6 +144,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -152,7 +156,30 @@
   </ItemDefinitionGroup>
 
   <ItemGroup>
+    <ClCompile Include="src\app.cpp" />
+    <ClCompile Include="src\game_client.cpp" />
+    <ClCompile Include="src\game_server.cpp" />
+    <ClCompile Include="src\hwid.cpp" />
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\message.cpp" />
+    <ClCompile Include="src\network.cpp" />
+    <ClCompile Include="src\sim_connection.cpp" />
+    <ClCompile Include="src\types.cpp" />
+    <ClCompile Include="src\util.cpp" />
+    <ClCompile Include="src\world.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\app.h" />
+    <ClInclude Include="include\common.h" />
+    <ClInclude Include="include\game_client.h" />
+    <ClInclude Include="include\game_server.h" />
+    <ClInclude Include="include\hwid.h" />
+    <ClInclude Include="include\message.h" />
+    <ClInclude Include="include\network.h" />
+    <ClInclude Include="include\sim_connection.h" />
+    <ClInclude Include="include\types.h" />
+    <ClInclude Include="include\util.h" />
+    <ClInclude Include="include\world.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
