@@ -10,13 +10,12 @@
 /* Include standard windows header */
 #include <windows.h>
 
-#pragma comment(lib, "Ws2_32.lib")
-
 /* Include stl headers */
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <deque>

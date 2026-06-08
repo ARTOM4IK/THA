@@ -13,6 +13,7 @@ struct World
   fs::path logPath;
   fs::path publicPath;
   fs::path tmpPath;
+
   std::string stage1Key;
   std::string stage2Token;
   std::string finalPassword;
@@ -22,8 +23,9 @@ struct World
   std::string imageMagic;
   std::string backupRoute;
   std::string vulnerableUserId;
-  static World generate(int forcedSeed, const FirewallConfig &firewall);
-  void writeRules(const FirewallConfig &firewall) const;
-  void writeDb() const;
-  void writeServiceScript(const FirewallConfig &firewall) const;
+
+  static World generate( int forcedSeed, const FirewallConfig &firewall );
+  void writeRules( const FirewallConfig &firewall ) const;
+  void writeDb( void ) const;
+  void writeServiceScript( const FirewallConfig &firewall ) const;
 };

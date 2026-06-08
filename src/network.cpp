@@ -1,62 +1,63 @@
 #include "network.h"
 
-WsaSession::WsaSession()
+WsaSession::WsaSession( void )
 {
   WSADATA data {};
   ok_ = WSAStartup(MAKEWORD(2, 2), &data) == 0;
 }
 
-WsaSession::~WsaSession()
+WsaSession::~WsaSession( void )
 {
   if (ok_)
     WSACleanup();
 }
 
-bool WsaSession::ok() const
+bool WsaSession::ok( void ) const
 {
   return ok_;
 }
 
-TcpSocket::TcpSocket(SOCKET socket) : socket_(socket) {}
+TcpSocket::TcpSocket( SOCKET socket ) : socket_(socket)
+{
+}
 
-TcpSocket::TcpSocket(TcpSocket &&other) noexcept 
+TcpSocket::TcpSocket( TcpSocket &&other ) noexcept
+{
+  socket_ = other.socket_;
+  other.socket_ = INVALID_SOCKET;
+}
+
+TcpSocket &TcpSocket::operator=( TcpSocket &&other ) noexcept
+{
+  if (this != &other)
   {
+    close();
     socket_ = other.socket_;
     other.socket_ = INVALID_SOCKET;
   }
+  return *this;
+}
 
-  TcpSocket &TcpSocket::operator=(TcpSocket &&other) noexcept 
+TcpSocket::~TcpSocket( void )
+{
+  close();
+}
+
+bool TcpSocket::valid( void ) const
+{
+  return socket_ != INVALID_SOCKET;
+}
+
+void TcpSocket::close( void )
+{
+  if (socket_ != INVALID_SOCKET)
   {
-    if (this != &other) 
-    {
-      close();
-      socket_ = other.socket_;
-      other.socket_ = INVALID_SOCKET;
-    }
-    return *this;
+    shutdown(socket_, SD_BOTH);
+    closesocket(socket_);
+    socket_ = INVALID_SOCKET;
   }
-
-  TcpSocket::~TcpSocket() 
-  {
-    close();
-  }
-
-  bool TcpSocket::valid() const 
-  {
-    return socket_ != INVALID_SOCKET;
-  }
-
-  void TcpSocket::close() 
-  {
-    if (socket_ != INVALID_SOCKET) 
-    {
-      shutdown(socket_, SD_BOTH);
-      closesocket(socket_);
-      socket_ = INVALID_SOCKET;
-    }
-  }
-
-  bool TcpSocket::connectTo( const std::string &host, uint16_t port ) 
+}
+bool TcpSocket::connectTo( const std::string &host, uint16_t port ) 
   {
     close();
     addrinfo hints{};

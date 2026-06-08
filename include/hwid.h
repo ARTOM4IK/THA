@@ -2,4 +2,4 @@
 
 #include "util.h"
 
-std::string loadOrCreateHwid(const std::string &role);
+std::string loadOrCreateHwid( const std::string &role );

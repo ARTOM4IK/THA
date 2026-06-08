@@ -2,30 +2,42 @@
 
 #include "network.h"
 
-enum class Role { Unknown, Hacker, Defender, Bot };
-std::string roleName(Role role);
-Role parseRole(const std::string &value);
+enum class Role
+{
+  Unknown,
+  Hacker,
+  Defender,
+  Bot
+};
 
-struct FirewallConfig {
+std::string roleName( Role role );
+Role parseRole( const std::string &value );
+
+struct FirewallConfig
+{
   bool typeGuard = false;
   bool mediaSanitizer = false;
   bool authFullMatch = false;
   bool backupAcl = false;
   int cipherShift = 7;
-  int ruleCount() const;
-  std::string describe() const;
+
+  int ruleCount( void ) const;
+  std::string describe( void ) const;
 };
 
-struct Packet {
+struct Packet
+{
   std::string endpoint;
   std::string mode;
   std::string payload;
   std::string cid;
   std::map<std::string, std::string> params;
 };
-std::map<std::string, std::string> parseKeyValuePayload(std::string payload);
 
-struct ServiceResult {
+std::map<std::string, std::string> parseKeyValuePayload( std::string payload );
+
+struct ServiceResult
+{
   bool ok = false;
   bool invalid = false;
   bool exploit = false;
@@ -38,7 +50,8 @@ struct ServiceResult {
   std::string fileName;
 };
 
-struct ClientConn {
+struct ClientConn
+{
   int id = 0;
   Role role = Role::Unknown;
   std::string name;
@@ -46,7 +59,7 @@ struct ClientConn {
   std::string ip;
   TcpSocket socket;
   std::mutex sendMutex;
-  std::atomic<bool> alive{true};
+  std::atomic<bool> alive{ true };
   int requests = 0;
   int errors = 0;
   int custom = 0;
@@ -57,7 +70,8 @@ struct ClientConn {
   int64_t lastSeenMs = 0;
 };
 
-struct BotState {
+struct BotState
+{
   int id = 0;
   std::string name;
   std::string hwid;
@@ -71,7 +85,8 @@ struct BotState {
   int64_t lastSeenMs = 0;
 };
 
-struct Activity {
+struct Activity
+{
   std::string time;
   int actorId = 0;
   std::string actorName;
