@@ -1,283 +1,45 @@
-# THA
-Tough Hacker Attack
+# ToughHA: A Procedural Two-Player LAN Cybersecurity Training Game
 
-# ToughHA: правила, роли и пример партии
+**Tough Hacker Attack (THA)**
 
-ToughHA - это LAN-игра на 2 игроков про атаку и защиту сервиса. Один игрок играет за hacker-а, второй за defender-а. Игра идет через TCP: сервер поднимает игровую инфраструктуру, defender подключается как администратор, hacker подключается как обычный клиент среди множества похожих фейковых клиентов.
+---
 
-## Как запускать
+## Abstract
 
-Один исполняемый файл поддерживает несколько режимов:
+ToughHA is a two-player, local-area-network (LAN) cybersecurity training game implemented as a single C++ executable. One participant acts as an attacker (*hacker*); the other acts as a system administrator (*defender*). At match start, the server procedurally generates a synthetic service environment: a C++ service script with embedded logical flaws, a database containing a crown secret, firewall overlay rules, activity logs, cryptographic tokens, and a population of background clients that inject noise into telemetry. The hacker interacts through a Linux-like console and must discover and chain service vulnerabilities via crafted network packets. The defender monitors client activity, inspects server artifacts, applies compensating controls, and attempts to identify and ban the attacker before the match timer expires. Victory conditions are asymmetric: the hacker wins by extracting the crown secret; the defender wins by surviving until timeout, correctly banning the hacker, or indirectly forcing a service collapse through over-aggressive policy. This document presents the system architecture, formal game rules, protocol semantics, defense mechanisms, and a representative match walkthrough.
 
-```powershell
-ToughHA.exe server [port] [--seed N] [--duration seconds] [--bots N]
-ToughHA.exe defender <server-ip> [port]
-ToughHA.exe hacker <server-ip> [port]
-ToughHA.exe sim
-```
+**Keywords:** cybersecurity education, procedural content generation, red-team/blue-team simulation, LAN game, exploit chaining, service hardening
 
-Пример обычной LAN-партии:
+---
 
-```powershell
-# ПК с сервером
-ToughHA.exe server 7777 --duration 600 --bots 12
+## 1. Introduction
 
-# ПК defender-а
-ToughHA.exe defender 192.168.1.10 7777
+Hands-on cybersecurity training often relies on static capture-the-flag (CTF) puzzles or isolated virtual machines. While effective for skill building, such setups rarely capture the adversarial dynamics of live service defense: incomplete visibility, noisy background traffic, policy trade-offs, and time pressure. ToughHA addresses this gap by embedding a complete attack–defense scenario inside a lightweight, reproducible game loop.
 
-# ПК hacker-а
-ToughHA.exe hacker 192.168.1.10 7777
-```
+Each match instantiates a unique *world* from a random seed. Vulnerability parameters, tokens, routes, and debug triggers change between sessions, preventing memorization while preserving a stable multi-stage exploit chain. Both roles operate through text consoles connected to a central TCP game server, making the system suitable for classroom LAN deployments, pair exercises, and automated regression via a built-in simulation mode.
 
-`192.168.1.10` здесь - пример IP компьютера, на котором запущен сервер.
+The remainder of this paper is organized as follows. Section 2 describes system architecture. Section 3 formalizes world generation. Sections 4–6 define game rules, player interfaces, and the service API. Section 7 covers defense policy. Section 8 discusses background clients and stochastic events. Section 9 provides deployment instructions. Section 10 presents a case study. Appendices list command references and quick-start playbooks.
 
-## Можно ли играть: server + defender на одном ПК, hacker на другом
+---
 
-Да, можно. Это нормальная схема.
+## 2. System Architecture
 
-На первом компьютере запускаются два окна:
+### 2.1. Components
 
-```powershell
-ToughHA.exe server 7777
-ToughHA.exe defender 127.0.0.1 7777
-```
+ToughHA ships as one executable (`ToughHA.exe`) with four runtime modes:
 
-На втором компьютере запускается hacker:
+| Mode | Role | Description |
+|------|------|-------------|
+| `server` | Match host | Generates the world, serves TCP connections, simulates bots, enforces rules |
+| `defender` | Blue team | Administrative console with filesystem and telemetry access |
+| `hacker` | Red team | Client console for packet injection and local artifact inspection |
+| `sim` | Test harness | Automated end-to-end validation over loopback TCP |
 
-```powershell
-ToughHA.exe hacker <IP-первого-ПК> 7777
-```
+Communication uses TCP. The server multiplexes multiple clients; the defender connects as an administrator, while the hacker connects as an ordinary client among procedurally spawned background clients.
 
-Defender в этом случае подключается к серверу локально через `127.0.0.1`, а hacker - по LAN IP первого компьютера. Главное, чтобы firewall Windows разрешал входящие TCP-подключения на выбранный порт, например `7777`.
+### 2.2. Runtime Layout
 
-## Главная идея партии
-
-Сервер генерирует игровой мир:
-
-- C++-скрипт сервиса с логическими ошибками.
-- Базу данных с главным секретом.
-- Файл правил firewall/service overlay.
-- Логи активности.
-- Fake clients, которые создают шум.
-- Случайные ключи, токены, пароль финального vault-а и параметры уязвимостей.
-
-Defender видит инфраструктуру и активность клиентов. Hacker видит только свою Linux-подобную консоль обычного клиента и должен через пакеты найти цепочку ошибок в сервисе.
-
-## Условия победы
-
-Hacker побеждает, если успевает получить главный секрет и вызвать финальный export:
-
-```text
-/core/export password=<final-password>
-```
-
-Defender побеждает, если:
-
-- hacker не успел взломать данные до конца таймера;
-- defender правильно вычислил hacker-а и забанил его по ID или hardware ID.
-
-Есть дополнительный риск для defender-а: слишком жесткие правила, частые ложные баны и нагрузка ухудшают сервис. Если жалобы доходят до лимита, защита проигрывает из-за collapse/reputation failure.
-
-## Игровой процесс hacker-а
-
-Hacker играет из консоли:
-
-```text
-hacker@toughha:~$
-```
-
-Он может отправлять обычные и кастомные пакеты:
-
-```powershell
-send standard /api/help
-send standard /api/profile user_id=5
-custom /api/profile user_id=-1&debug=1
-burst 30 standard /api/ping client=test
-```
-
-Важные команды hacker-а:
-
-```powershell
-help
-send standard <endpoint> k=v k=v
-custom <endpoint> k=v&x=y
-burst <count> <standard|custom> <endpoint> k=v
-ls tmp
-cat tmp/<file>
-meta tmp/<file>
-rot <text> <shift>
-batch <file>
-quit
-```
-
-Ответы сервера, которые похожи на файлы, сохраняются в настоящую папку:
-
-```text
-runtime/hacker_tmp
-```
-
-То есть hacker может получить, например, `avatar_raw_....thaimg`, открыть его через `cat tmp/...` или посмотреть метаданные через `meta tmp/...`.
-
-Главная задача hacker-а - не просто спамить сервер, а читать ответы, находить закономерности и собирать exploit-chain:
-
-1. Найти endpoint, который странно реагирует на кастомные данные.
-2. Получить файл/ответ с метаданными.
-3. Достать первый ключ.
-4. Использовать ошибку в auth-валидации.
-5. Получить session/route к vault.
-6. Получить зашифрованный пароль.
-7. Расшифровать его.
-8. Забрать crown data через `/core/export`.
-
-## Игровой процесс defender-а
-
-Defender играет из админ-консоли:
-
-```text
-defender@toughha:/srv$
-```
-
-Он видит активность всех клиентов, но не получает прямой надписи “это hacker”. Среди клиентов есть fake clients, которые тоже иногда ошибаются, отправляют кастомные запросы и создают шум.
-
-В таблицах и логах все клиенты показываются нейтрально: без `BOT`, без `HACK`, без колонки `fake/tcp`. Defender должен вычислять игрока по поведению: цепочка endpoint-ов, количество custom-запросов, ошибки, подозрительность и прогресс.
-
-Важные команды defender-а:
-
-```powershell
-help
-status
-clients
-logs 20
-inspect <id>
-ban <id>
-banhw <HWID>
-rules
-rule add type_guard
-rule add media_sanitizer
-rule add auth_fullmatch
-rule add backup_acl
-rule del <rule>
-cipher <0-25>
-ls /srv
-cat /srv/service/generated_service.cpp
-cat /srv/db/main.db
-cat /srv/config/firewall.rules
-cat /srv/logs/activity.log
-tail service
-events 20
-watch on
-watch off
-quit
-```
-
-Defender может читать настоящие файлы сервера через игровую консоль:
-
-```powershell
-cat /srv/service/generated_service.cpp
-cat /srv/db/main.db
-cat /srv/logs/activity.log
-```
-
-Физически эти файлы лежат в:
-
-```text
-runtime/server
-```
-
-## Правила защиты
-
-Defender может включать правила:
-
-```powershell
-rule add type_guard
-rule add media_sanitizer
-rule add auth_fullmatch
-rule add backup_acl
-```
-
-Что они делают:
-
-| Правило | Эффект |
-|---|---|
-| `type_guard` | Блокирует опасные profile-запросы с debug/плохим `user_id`. |
-| `media_sanitizer` | Чистит метаданные в image-ответах. |
-| `auth_fullmatch` | Закрывает prefix-ошибку в `/auth/check`. |
-| `backup_acl` | Закрывает обход ACL в `/vault/read`. |
-
-Каждое включенное правило делает сервис медленнее и добавляет жалобы. Это важно: defender не может просто включить все и забыть. Ему нужно балансировать между безопасностью и качеством сервиса.
-
-Дополнительно defender может менять шифрование vault-а:
-
-```powershell
-cipher 9
-```
-
-Это регенерирует C++-скрипт сервиса и меняет ROT-шифр, которым отдается vault blob. Такая смена тоже добавляет жалобы.
-
-## Fake clients
-
-Fake clients нужны, чтобы defender-у было не скучно и не слишком легко:
-
-- они делают обычные запросы;
-- иногда ошибаются;
-- иногда отправляют кастомные данные;
-- могут создавать burst/noise;
-- имеют свои ID, IP и hardware ID;
-- могут выглядеть подозрительно.
-
-Если defender банит fake client-а, это считается ложным баном и увеличивает жалобы.
-
-При этом интерфейс не пишет defender-у “это fake”. Если бан оказался ошибочным, игра отвечает как про обычного клиента и добавляет жалобы. Это сделано специально, чтобы бан был решением с риском.
-
-Live-уведомления о запросах fake clients не печатаются поверх ввода по умолчанию. Они складываются в локальный файл `runtime/defender_tmp/events.log` и смотрятся командой:
-
-```powershell
-events 20
-```
-
-Серверную историю активности можно смотреть командой:
-
-```powershell
-logs 20
-```
-
-Если нужна старая живая лента, ее можно временно включить:
-
-```powershell
-watch on
-```
-
-И снова выключить:
-
-```powershell
-watch off
-```
-
-## Случайные события
-
-Во время партии сервер может создавать события:
-
-- временный сетевой jitter;
-- routing storm;
-- cache rollback;
-- рост жалоб из-за нестабильности;
-- частичная потеря прогресса hacker-а при rollback-событии.
-
-Это делает партию менее линейной: hacker иногда вынужден повторять шаг, defender получает дополнительный шум в логах.
-
-## Разбор одной игровой партии
-
-Ниже пример партии, где hacker побеждает. Конкретные ключи, route и параметры каждый раз генерируются случайно, поэтому значения в реальной партии будут другими.
-
-### 1. Старт
-
-Сервер запускается:
-
-```powershell
-ToughHA.exe server 7777 --duration 600 --bots 12
-```
-
-Сервер генерирует:
+During a match, the server materializes artifacts under `runtime/server/`:
 
 ```text
 runtime/server/service/generated_service.cpp
@@ -286,94 +48,179 @@ runtime/server/config/firewall.rules
 runtime/server/logs/activity.log
 ```
 
-Defender подключается:
+The hacker receives response files in `runtime/hacker_tmp/`. The defender may buffer live notifications in `runtime/defender_tmp/events.log`. These paths are exposed through in-game virtual paths (`/srv/...` for the defender, `tmp/...` for the hacker).
 
-```powershell
-ToughHA.exe defender 127.0.0.1 7777
+### 2.3. Packet Model
+
+All hacker-side interactions reduce to *packets* with three components:
+
+```text
+mode + endpoint + payload
 ```
 
-Hacker подключается:
+Example:
 
-```powershell
-ToughHA.exe hacker 127.0.0.1 7777
+```text
+custom /api/profile user_id=-1&debug=1
 ```
 
-### 2. Defender изучает сервер
+| Field | Meaning |
+|-------|---------|
+| `mode` | `standard` (benign client behavior) or `custom` (attacker-crafted) |
+| `endpoint` | Service function path (e.g., `/api/profile`) |
+| `payload` | `key=value` pairs separated by `&` |
 
-Defender смотрит статус:
+The defender observes resulting activity in logs and client telemetry but receives no explicit label marking which client is the hacker.
 
-```powershell
-status
-clients
-logs 10
+---
+
+## 3. Procedural World Generation
+
+At server startup, the `World` generator produces:
+
+- A C++ service script (`generated_service.cpp`) encoding conditional branches that implement the exploit chain.
+- A SQLite-style database file (`main.db`) storing the crown secret.
+- Firewall/service overlay rules (`firewall.rules`).
+- An append-only activity log.
+- Randomized cryptographic artifacts: stage-1 key, stage-2 session token, vault password, ROT cipher shift, debug flag names/values, image magic format string, backup route identifier, and vulnerable `user_id` threshold.
+- A configurable population of background clients (`--bots N`).
+
+Because generation is seed-driven (`--seed N`), matches are reproducible for debugging and grading while remaining unpredictable in casual play.
+
+Representative constants visible to the defender in the generated service include:
+
+```text
+kDebugFlagName, kDebugFlagValue, kBadUserId
+kImageMagic, kBackupRoute, kStage1Key
+kStage2Token, kVaultPassword, kCipherShift
 ```
 
-Потом читает сгенерированный C++-сервис:
+---
+
+## 4. Game Rules and Victory Conditions
+
+### 4.1. Match Parameters
 
 ```powershell
-cat /srv/service/generated_service.cpp
+ToughHA.exe server [port] [--seed N] [--duration seconds] [--bots N]
 ```
 
-Он видит, что сервис содержит подозрительные ветки: debug profile, image metadata, prefix auth, backup route. Defender может включить одно правило, например:
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `port` | `7777` | TCP listen port |
+| `--seed` | random | Deterministic world generation |
+| `--duration` | unlimited | Defender survival timer (seconds) |
+| `--bots` | `12` | Background client count |
 
-```powershell
-rule add media_sanitizer
+### 4.2. Hacker Victory
+
+The hacker wins by completing the exploit chain and invoking:
+
+```text
+/core/export password=<final-password>
 ```
 
-Но если он включит слишком много правил, сервис станет медленнее и жалобы начнут расти.
+The final password is obtained by decrypting the vault blob returned from `/vault/read`.
 
-### 3. Hacker исследует API
+### 4.3. Defender Victory
 
-Hacker начинает с обычного запроса:
+The defender wins if any of the following occur:
+
+1. **Timeout:** the match timer reaches zero before the hacker exports the crown secret.
+2. **Correct ban:** the defender bans the hacker by client ID (`ban <id>`) or hardware ID (`banhw <HWID>`).
+3. **Indirect failure (hacker):** the hacker disconnects or is banned (if correctly identified).
+
+### 4.4. Defender Defeat (Service Collapse)
+
+Defensive actions carry a *reputation cost*. Each enabled rule increases service latency and adds complaints. False bans of background clients add substantial complaints. Random instability events may also raise complaint scores. If complaints reach **100**, the service collapses and the defender loses (*reputation failure*).
+
+This models a fundamental blue-team constraint: security controls must be balanced against availability and operator error.
+
+---
+
+## 5. Player Roles and Interfaces
+
+### 5.1. Hacker Console
+
+Prompt:
+
+```text
+hacker@toughha:~$
+```
+
+The hacker sends packets, inspects downloaded artifacts, decrypts vault data, and optionally runs batch scripts. Custom packets increase suspicion scores visible to the defender.
+
+Core command categories:
+
+| Category | Commands |
+|----------|----------|
+| Packet injection | `send standard`, `send custom`, `custom`, `std`, `burst` |
+| Local files | `ls tmp`, `cat tmp/<file>`, `meta tmp/<file>`, `inbox` |
+| Cryptography | `rot <text> <shift>` |
+| Automation | `batch <file>` |
+| Notifications | `events [n]`, `events clear`, `watch on\|off` |
+| Session | `help`, `quit` |
+
+### 5.2. Defender Console
+
+Prompt:
+
+```text
+defender@toughha:/srv$
+```
+
+The defender reads server files, monitors clients, tailors firewall rules, rotates vault cipher, and bans suspects.
+
+Core command categories:
+
+| Category | Commands |
+|----------|----------|
+| Situation awareness | `status`, `clients`, `logs [n]`, `inspect <id>`, `events [n]` |
+| Enforcement | `ban <id>`, `banhw <HWID>` |
+| Policy | `rules`, `rule add <rule>`, `rule del <rule>`, `cipher <0-25>` |
+| Filesystem | `ls /srv/...`, `cat /srv/...`, `tail service` |
+| Automation | `batch <file>`, `watch on\|off` |
+| Session | `help`, `quit` |
+
+### 5.3. Information Asymmetry
+
+The UI deliberately omits labels such as `BOT`, `HACK`, or `fake/tcp`. All clients appear in neutral telemetry tables. The defender must infer the hacker through behavioral signals: endpoint sequences, custom-packet ratio, error rates, suspicion scores, and exploit-chain progress (`PROG` column). Background clients may mimic partial attacker behavior, making premature bans risky.
+
+---
+
+## 6. Service API and Exploit Chain
+
+The generated service exposes a public HTTP-like API. The canonical multi-stage attack proceeds as follows.
+
+### 6.1. Stage 0 — Reconnaissance
 
 ```powershell
 send standard /api/help
-```
-
-Потом проверяет нормальный profile:
-
-```powershell
+send standard /api/ping client=hacker
 send standard /api/profile user_id=5
 ```
 
-Ответ нормальный. Тогда hacker пробует кастомный profile:
+`/api/help` lists public endpoints. `/api/ping` verifies connectivity. Normal profile requests establish baseline behavior.
+
+### 6.2. Stage 1 — Debug Profile Leak
+
+The service may expose a hidden debug branch triggered by a specific negative `user_id` and a seed-dependent debug flag (e.g., `debug=1`, `trace=true`, `diag=dump`).
 
 ```powershell
 custom /api/profile user_id=-1&debug=1
 ```
 
-Если параметры совпали с текущей генерацией мира, сервер возвращает debug dump и сохраняет его как tmp-файл.
+On success, the server returns a dump file hinting at the image endpoint and required parameters. The defender can read exact trigger values in `generated_service.cpp`.
 
-Hacker смотрит файлы:
+**Defensive countermeasure:** `type_guard` blocks dangerous profile/debug combinations.
 
-```powershell
-ls tmp
-cat tmp/profile_dump_....txt
-```
-
-Внутри он находит подсказку на `/cdn/image` и специальный формат.
-
-### 4. Hacker получает метаданные
-
-Hacker отправляет кастомный image-запрос:
+### 6.3. Stage 2 — Image Metadata Leak
 
 ```powershell
 custom /cdn/image asset=avatar&format=raw_frame&width=0
 ```
 
-Сервер возвращает файл:
-
-```text
-avatar_raw_....thaimg
-```
-
-Hacker читает метаданные:
-
-```powershell
-meta tmp/avatar_raw_....thaimg
-```
-
-Внутри находится первый ключ:
+A specially crafted `format` and `width=0` may return a `.thaimg` file whose metadata embeds the stage-1 key:
 
 ```text
 EXIF-Comment=stage1=K1-...
@@ -381,35 +228,26 @@ EXIF-Auth=/auth/check
 EXIF-Bug=token prefix accepts overflow suffix
 ```
 
-### 5. Defender видит подозрительность
-
-В это время defender смотрит логи:
+Inspect via:
 
 ```powershell
-logs 30
-clients
-inspect <id>
+ls tmp
+meta tmp/avatar_raw_....thaimg
 ```
 
-Он видит, что один клиент часто использует `custom`, получает ошибки и ходит в странные endpoint-ы. Но fake clients тоже ошибаются, поэтому банить сразу рискованно.
+**Defensive countermeasure:** `media_sanitizer` strips exploitable metadata from image responses.
 
-Если defender уверен, он может сделать:
+### 6.4. Stage 3 — Authentication Prefix Bypass
 
-```powershell
-ban <id>
-```
-
-Если ID принадлежит hacker-у, defender сразу выигрывает. Если это fake client, растут жалобы.
-
-### 6. Hacker ломает auth
-
-Hacker использует prefix-ошибку:
+The `/auth/check` endpoint may compare only a prefix of the token. The attacker appends an overflow suffix:
 
 ```powershell
 custom /auth/check token=K1-ABCDEF::overflow
 ```
 
-Если defender не включил `auth_fullmatch`, сервер возвращает session и backup route:
+(Use the first eight characters of the stage-1 key plus a suffix such as `::overflow`.)
+
+Success yields:
 
 ```text
 session=S2-...
@@ -417,21 +255,15 @@ route=backup_...
 next=/vault/read
 ```
 
-Hacker сохраняет/читает этот tmp-файл:
+**Defensive countermeasure:** `auth_fullmatch` requires exact token matching.
 
-```powershell
-cat tmp/auth_session_....tmp
-```
-
-### 7. Hacker читает vault
-
-Hacker вызывает:
+### 6.5. Stage 4 — Vault Read and Decryption
 
 ```powershell
 custom /vault/read session=S2-...&route=backup_...
 ```
 
-Сервер возвращает encrypted vault blob:
+Response example:
 
 ```text
 cipher=rot9
@@ -439,930 +271,74 @@ data=AXXC-...
 hint=decrypt with negative shift
 ```
 
-Hacker расшифровывает:
+Decrypt with the in-console ROT utility:
 
 ```powershell
 rot AXXC-... -9
 ```
 
-Получает финальный пароль:
+ yielding `ROOT-...`.
 
-```text
-ROOT-...
+The defender may rotate cipher mid-match:
+
+```powershell
+cipher 9
 ```
 
-### 8. Финальный export
+This regenerates the service script and invalidates previously captured blobs at the cost of added complaints.
 
-Hacker отправляет:
+**Defensive countermeasure:** `backup_acl` denies vault reads via the backup route.
+
+### 6.6. Stage 5 — Crown Export (Terminal Objective)
 
 ```powershell
 custom /core/export password=ROOT-...
 ```
 
-Если пароль правильный, сервер возвращает crown data:
+Correct password returns crown data and terminates the match:
 
 ```text
 flag=TOUGHHA{ROOT-...}
 status=hacker_win
 ```
 
-Игра завершается победой hacker-а.
+### 6.7. Endpoint Reference
 
-## Как defender мог остановить эту партию
+| Endpoint | Parameters | Purpose |
+|----------|------------|---------|
+| `/api/help` | — | Public API catalog |
+| `/api/ping` | `client=<name>` | Liveness check |
+| `/api/profile` | `user_id=<int>` | User profile; debug branch |
+| `/cdn/image` | `asset`, `format`, `width` | Media delivery; metadata side channel |
+| `/auth/check` | `token=<string>` | Token validation; prefix flaw |
+| `/vault/read` | `session`, `route` | Encrypted secret blob |
+| `/core/export` | `password=<plain>` | Final exfiltration gate |
 
-Defender мог победить несколькими способами:
+Error responses (`ERR ...`, `DENY ...`) are informative: they reveal type constraints, missing parameters, and active defensive rules.
 
-1. Найти hacker-а по telemetry:
+---
+
+## 7. Defense Mechanisms
+
+The defender enables overlay rules at runtime:
 
 ```powershell
-clients
-inspect <id>
-ban <id>
-```
-
-2. Закрыть конкретный слой атаки:
-
-```powershell
+rule add type_guard
 rule add media_sanitizer
-```
-
-Это помешало бы hacker-у получить stage1 из image metadata.
-
-3. Закрыть auth-ошибку:
-
-```powershell
 rule add auth_fullmatch
-```
-
-Это остановило бы prefix overflow на `/auth/check`.
-
-4. Закрыть vault route:
-
-```powershell
 rule add backup_acl
 ```
 
-Это остановило бы чтение `/vault/read`.
-
-Но defender должен учитывать цену защиты: каждое правило увеличивает latency и жалобы. Если включить все слишком рано и еще ошибочно банить fake clients, можно проиграть по качеству сервиса.
-
-## Рекомендуемая стратегия
-
-Для hacker-а:
-
-- сначала использовать `/api/help`;
-- читать каждый tmp-файл;
-- проверять `meta`;
-- не спамить слишком рано, иначе defender быстрее заметит;
-- использовать `burst` как маскировку или давление, но осторожно;
-- помнить, что ROT можно расшифровать командой `rot`.
-
-Для defender-а:
-
-- сразу открыть `clients`, `logs`, `cat /srv/service/generated_service.cpp`;
-- не включать все правила без причины;
-- смотреть не только ошибки, но и последовательность endpoint-ов;
-- fake client обычно ошибается хаотично, hacker движется по цепочке;
-- банить только после `inspect`;
-- менять `cipher`, если есть признаки доступа к vault;
-- закрывать именно тот слой, к которому hacker уже близко.
-
-## Локальный автотест
-
-Для проверки всей игры есть режим:
-
-```powershell
-ToughHA.exe sim
-```
-
-Он локально поднимает сервер, подключает defender-а и hacker-а через TCP, проверяет чтение файлов, правила защиты, смену шифра, fake clients, burst-пакеты, tmp-файлы, exploit-chain и завершение партии.
-
-# ToughHA: команды, пакеты и функции игроков
-
-Этот файл объясняет игру проще и практичнее, чем общий файл правил. Здесь разобрано, что именно вводить в консоль, что такое endpoint, зачем нужны `=`, какие параметры бывают в пакетах и как играть за hacker-а и defender-а.
-
-## Самое важное за 1 минуту
-
-В игре hacker не нажимает кнопки в меню. Он отправляет пакеты на сервер.
-
-Пакет состоит из трех вещей:
-
-```text
-mode + endpoint + payload
-```
-
-Пример:
-
-```powershell
-custom /api/profile user_id=-1&debug=1
-```
-
-Что здесь что:
-
-```text
-custom              режим пакета: кастомный
-/api/profile        endpoint: куда на сервере отправляем пакет
-user_id=-1&debug=1  payload: данные внутри пакета
-```
-
-Endpoint - это адрес функции на сервере. Например `/api/profile` означает: “отправить пакет в функцию профиля пользователя”.
-
-`key=value` - это параметр. Слева имя, справа значение.
-
-```text
-user_id=5
-```
-
-Значит:
-
-```text
-имя параметра: user_id
-значение: 5
-```
-
-Если параметров несколько, они разделяются символом `&`:
-
-```text
-user_id=5&debug=1&format=raw_frame
-```
-
-Это значит:
-
-```text
-user_id = 5
-debug = 1
-format = raw_frame
-```
-
-## Обычный пакет и кастомный пакет
-
-Есть два основных режима:
-
-```text
-standard
-custom
-```
-
-`standard` - обычный пакет, который похож на нормальное поведение обычного клиента.
-
-Пример:
-
-```powershell
-send standard /api/profile user_id=5
-```
-
-`custom` - пакет, который hacker собирает сам. Через него можно отправлять странные значения, лишние параметры, неправильные типы данных и искать ошибки в логике сервиса.
-
-Пример:
-
-```powershell
-custom /api/profile user_id=-1&debug=1
-```
-
-Важно: custom-пакеты часто повышают подозрительность. Defender видит, что клиент отправляет странные запросы.
-
-## Как писать payload
-
-Payload можно писать двумя способами.
-
-Способ 1: через `&`.
-
-```powershell
-custom /cdn/image asset=avatar&format=raw_frame&width=0
-```
-
-Способ 2: через пробелы в команде `send`.
-
-```powershell
-send standard /cdn/image asset=logo format=jpg width=128
-```
-
-Внутри игра превратит это примерно в:
-
-```text
-asset=logo&format=jpg&width=128
-```
-
-То есть эти две идеи похожи:
-
-```powershell
-send standard /api/profile user_id=5
-custom /api/profile user_id=5
-```
-
-Разница в режиме: первый пакет выглядит обычным, второй - кастомным.
-
-## Команды hacker-а
-
-Консоль hacker-а выглядит примерно так:
-
-```text
-hacker@toughha:~$
-```
-
-### `help`
-
-Показывает базовые команды hacker-а.
-
-```powershell
-help
-```
-
-### `send standard <endpoint> <payload>`
-
-Отправляет обычный пакет.
-
-Пример:
-
-```powershell
-send standard /api/help
-```
-
-Пример с параметром:
-
-```powershell
-send standard /api/profile user_id=5
-```
-
-Пример с несколькими параметрами:
-
-```powershell
-send standard /cdn/image asset=logo format=jpg width=128
-```
-
-Когда использовать: чтобы вести себя как обычный клиент и изучать нормальные ответы сервера.
-
-### `send custom <endpoint> <payload>`
-
-Отправляет кастомный пакет через полную форму команды.
-
-```powershell
-send custom /api/profile user_id=-1 debug=1
-```
-
-Можно также писать так:
-
-```powershell
-custom /api/profile user_id=-1&debug=1
-```
-
-### `custom <endpoint> <payload>`
-
-Короткая команда для кастомного пакета.
-
-```powershell
-custom /api/profile user_id=-1&debug=1
-```
-
-Когда использовать: чтобы искать уязвимости.
-
-Примеры исследований:
-
-```powershell
-custom /api/profile user_id=abc
-custom /api/profile user_id=-1
-custom /api/profile user_id=-1&debug=1
-custom /cdn/image asset=avatar&format=raw_frame&width=0
-custom /auth/check token=test
-```
-
-Если сервер отвечает `ERR wrong type`, значит тип данных неправильный. Например `user_id=abc` плохой, потому что `user_id` должен быть числом.
-
-### `std <endpoint> <payload>`
-
-Короткая форма обычного standard-пакета.
-
-```powershell
-std /api/profile user_id=5
-```
-
-То же самое, что:
-
-```powershell
-send standard /api/profile user_id=5
-```
-
-### `burst <count> <standard|custom> <endpoint> <payload>`
-
-Отправляет сразу много пакетов.
-
-```powershell
-burst 20 standard /api/ping client=test
-```
-
-Это отправит 20 обычных ping-пакетов.
-
-Можно отправлять custom-burst:
-
-```powershell
-burst 10 custom /api/profile user_id=-1&debug=1
-```
-
-Когда использовать:
-
-- для нагрузки;
-- для маскировки среди шума;
-- для проверки поведения сервера при повторных запросах.
-
-Минус: defender увидит много запросов.
-
-### `ls tmp`
-
-Показывает файлы, которые hacker получил от сервера.
-
-```powershell
-ls tmp
-```
-
-Физически файлы лежат в:
-
-```text
-runtime/hacker_tmp
-```
-
-### `cat tmp/<file>`
-
-Открывает полученный tmp-файл прямо в консоли.
-
-```powershell
-cat tmp/avatar_raw_12345.thaimg
-```
-
-Так hacker читает ответы, дампы, vault blob и другие данные.
-
-### `meta tmp/<file>`
-
-Показывает строки, похожие на метаданные:
-
-```powershell
-meta tmp/avatar_raw_12345.thaimg
-```
-
-Команда ищет строки с:
-
-```text
-EXIF
-META
-cipher=
-session=
-route=
-data=
-```
-
-Это удобно, если файл большой и нужно быстро найти секретную строку.
-
-### `inbox`
-
-Показывает список файлов, которые были сохранены из ответов сервера.
-
-```powershell
-inbox
-```
-
-### `events [n]`
-
-Показывает последние локально сохраненные уведомления, которые раньше печатались прямо поверх ввода.
-
-```powershell
-events
-events 30
-```
-
-Теперь live-уведомления по умолчанию не мешают печатать команды. Они сохраняются в отдельный файл:
-
-```text
-runtime/hacker_tmp/events.log
-runtime/defender_tmp/events.log
-```
-
-Для defender-а это особенно важно: постоянные сообщения фоновых клиентов и запросах больше не перебивают строку ввода. Смотреть их можно через:
-
-```powershell
-events 20
-```
-
-А серверную ленту активности defender всё еще может смотреть так:
-
-```powershell
-logs 20
-```
-
-### `events clear`
-
-Очищает локальный буфер уведомлений.
-
-```powershell
-events clear
-```
-
-### `watch on|off`
-
-Включает или выключает старое поведение, когда уведомления печатаются сразу в консоль.
-
-```powershell
-watch on
-watch off
-```
-
-По умолчанию стоит:
-
-```text
-watch off
-```
-
-### `rot <text> <shift>`
-
-ROT-шифр. Нужен для расшифровки vault blob.
-
-Пример:
-
-```powershell
-rot URYYB -13
-```
-
-Если в файле написано:
-
-```text
-cipher=rot9
-data=AXXC-VRN...
-```
-
-то расшифровать можно так:
-
-```powershell
-rot AXXC-VRN... -9
-```
-
-То есть если шифр `rot9`, для расшифровки нужен сдвиг `-9`.
-
-### `batch <file>`
-
-Запускает локальный файл с командами, почти как простой batch-скрипт.
-
-```powershell
-batch attack.txt
-```
-
-Пример содержимого `attack.txt`:
-
-```text
-send standard /api/help
-sleep 300
-send standard /api/profile user_id=5
-sleep 300
-custom /api/profile user_id=-1&debug=1
-```
-
-Строки `sleep 300` делают паузу в миллисекундах.
-
-Комментарии можно писать так:
-
-```text
-# comment
-rem comment
-```
-
-### `quit`
-
-Выход из клиента.
-
-```powershell
-quit
-```
-
-## Endpoint-ы сервера
-
-Endpoint - это “функция” на сервере. Hacker отправляет пакет в endpoint, а сервис решает, что вернуть.
-
-## `/api/help`
-
-Публичная справка API.
-
-Команда:
-
-```powershell
-send standard /api/help
-```
-
-Payload не нужен.
-
-Что дает: список известных endpoint-ов и примерные параметры.
-
-## `/api/ping`
-
-Проверка связи.
-
-Команда:
-
-```powershell
-send standard /api/ping client=my-test
-```
-
-Параметры:
-
-```text
-client=<любое имя>
-```
-
-Ожидаемый смысл ответа:
-
-```text
-OK pong
-```
-
-Это безопасный endpoint. Через него удобно проверять, что соединение живое.
-
-## `/api/profile`
-
-Профиль пользователя.
-
-Нормальный запрос:
-
-```powershell
-send standard /api/profile user_id=5
-```
-
-Параметры:
-
-```text
-user_id=<целое число>
-```
-
-Примеры:
-
-```powershell
-send standard /api/profile user_id=1
-send standard /api/profile user_id=25
-custom /api/profile user_id=-1
-custom /api/profile user_id=abc
-```
-
-Если отправить:
-
-```powershell
-custom /api/profile user_id=abc
-```
-
-сервер может ответить:
-
-```text
-ERR wrong type: user_id must be int
-```
-
-Это значит, что `user_id` должен быть числом.
-
-Возможная уязвимость: debug-ветка. Иногда сервис генерируется так, что особый `user_id` и особый debug-параметр возвращают dump.
-
-Пример идеи:
-
-```powershell
-custom /api/profile user_id=-1&debug=1
-```
-
-Но конкретные значения генерируются случайно. Это может быть не `debug=1`, а например:
-
-```text
-trace=true
-diag=dump
-verbose=full
-```
-
-И `user_id` тоже может быть другим:
-
-```text
--1
--7
--404
-00000000000000000000
-```
-
-Hacker должен подобрать или вывести это по поведению сервиса. Defender может увидеть точные значения в:
-
-```powershell
-cat /srv/service/generated_service.cpp
-```
-
-## `/cdn/image`
-
-Получение картинки/медиа-файла.
-
-Нормальный запрос:
-
-```powershell
-send standard /cdn/image asset=logo format=jpg width=128
-```
-
-Параметры:
-
-```text
-asset=<имя картинки>
-format=<формат>
-width=<число>
-```
-
-Примеры:
-
-```powershell
-send standard /cdn/image asset=logo format=jpg width=128
-custom /cdn/image asset=avatar&format=raw_frame&width=0
-custom /cdn/image asset=avatar&format=meta_raw&width=0
-```
-
-Возможная уязвимость: если подобрать специальный `format` и `width=0`, сервер может вернуть файл с метаданными.
-
-После ответа:
-
-```powershell
-ls tmp
-meta tmp/avatar_raw_....thaimg
-cat tmp/avatar_raw_....thaimg
-```
-
-В метаданных можно найти первый ключ:
-
-```text
-stage1=K1-...
-```
-
-## `/auth/check`
-
-Проверка токена.
-
-Обычная форма:
-
-```powershell
-custom /auth/check token=K1-....
-```
-
-Параметры:
-
-```text
-token=<токен>
-```
-
-Возможная уязвимость: prefix-сравнение. Это значит, что сервис может проверять не весь токен, а только начало.
-
-Если в файле найдено:
-
-```text
-stage1=K1-ABCDEF123456
-```
-
-можно проверить идею:
-
-```powershell
-custom /auth/check token=K1-ABCDE::overflow
-```
-
-В текущей реализации обычно используется первые 8 символов stage1-ключа плюс лишний хвост:
-
-```powershell
-custom /auth/check token=<первые-8-символов-stage1>::overflow
-```
-
-Если уязвимость сработала, ответ даст:
-
-```text
-session=S2-...
-route=backup_...
-next=/vault/read
-```
-
-Потом:
-
-```powershell
-cat tmp/auth_session_....tmp
-```
-
-## `/vault/read`
-
-Чтение vault blob.
-
-Команда:
-
-```powershell
-custom /vault/read session=S2-...&route=backup_...
-```
-
-Параметры:
-
-```text
-session=<сессия из /auth/check>
-route=<route из /auth/check>
-```
-
-Если все правильно, сервер вернет зашифрованный blob:
-
-```text
-cipher=rot9
-data=...
-hint=decrypt with negative shift
-```
-
-Расшифровка:
-
-```powershell
-rot <data> -9
-```
-
-Если cipher другой, например `rot4`, значит:
-
-```powershell
-rot <data> -4
-```
-
-## `/core/export`
-
-Финальный endpoint.
-
-Команда:
-
-```powershell
-custom /core/export password=ROOT-...
-```
-
-Параметры:
-
-```text
-password=<расшифрованный пароль>
-```
-
-Если пароль правильный, hacker получает crown data и выигрывает.
-
-## Как начать играть за hacker-а: простой маршрут
-
-Это учебный маршрут. В реальной партии defender может закрывать правилами отдельные шаги.
-
-### Шаг 1. Проверить связь
-
-```powershell
-send standard /api/ping client=hacker
-```
-
-Если есть `OK pong`, соединение работает.
-
-### Шаг 2. Посмотреть публичный API
-
-```powershell
-send standard /api/help
-```
-
-Ты узнаешь, какие endpoint-ы вообще существуют.
-
-### Шаг 3. Проверить обычный profile
-
-```powershell
-send standard /api/profile user_id=5
-```
-
-Это нормальный запрос. Он нужен, чтобы понять обычный ответ.
-
-### Шаг 4. Искать странное поведение profile
-
-Проверяй разные значения:
-
-```powershell
-custom /api/profile user_id=abc
-custom /api/profile user_id=-1
-custom /api/profile user_id=-7
-custom /api/profile user_id=-404
-custom /api/profile user_id=-1&debug=1
-custom /api/profile user_id=-7&debug=1
-custom /api/profile user_id=-404&debug=1
-custom /api/profile user_id=-1&trace=true
-custom /api/profile user_id=-1&diag=dump
-custom /api/profile user_id=-1&verbose=full
-```
-
-Цель - получить не просто `ERR`, а файл или dump с подсказкой.
-
-### Шаг 5. Читать tmp-файлы
-
-После интересного ответа:
-
-```powershell
-ls tmp
-cat tmp/<имя-файла>
-```
-
-Если файл похож на картинку или blob:
-
-```powershell
-meta tmp/<имя-файла>
-```
-
-### Шаг 6. Использовать подсказку на image
-
-Если dump говорит попробовать `/cdn/image`, отправляй:
-
-```powershell
-custom /cdn/image asset=avatar&format=<format-из-dump>&width=0
-```
-
-Потом:
-
-```powershell
-ls tmp
-meta tmp/<image-file>
-```
-
-Ищи:
-
-```text
-stage1=...
-```
-
-### Шаг 7. Проверить auth
-
-Если stage1 выглядит так:
-
-```text
-K1-ABCDEF123456
-```
-
-пробуй первые 8 символов и хвост:
-
-```powershell
-custom /auth/check token=K1-ABCDE::overflow
-```
-
-Если ответ содержит `session=` и `route=`, ты прошел следующий слой.
-
-### Шаг 8. Прочитать vault
-
-```powershell
-custom /vault/read session=<session>&route=<route>
-```
-
-Потом:
-
-```powershell
-cat tmp/<vault-file>
-```
-
-Найди:
-
-```text
-cipher=rotN
-data=...
-```
-
-### Шаг 9. Расшифровать пароль
-
-Если написано:
-
-```text
-cipher=rot9
-data=ABC...
-```
-
-пиши:
-
-```powershell
-rot ABC... -9
-```
-
-Результат должен быть похож на:
-
-```text
-ROOT-...
-```
-
-### Шаг 10. Забрать финальные данные
-
-```powershell
-custom /core/export password=ROOT-...
-```
-
-Если пароль правильный, игра закончится победой hacker-а.
-
-## Команды defender-а
-
-Консоль defender-а выглядит примерно так:
-
-```text
-defender@toughha:/srv$
-```
-
-Defender - это администратор сервера. Он видит файлы, логи и клиентскую телеметрию, но не получает прямой подписи, где hacker, а где фоновый клиент.
-
-### `help`
-
-Показывает команды defender-а.
-
-```powershell
-help
-```
-
-### `status`
-
-Показывает состояние партии.
-
-```powershell
-status
-```
-
-Примерные поля:
+| Rule | Effect |
+|------|--------|
+| `type_guard` | Blocks dangerous profile requests with debug flags or invalid `user_id` |
+| `media_sanitizer` | Removes exploitable metadata from image responses |
+| `auth_fullmatch` | Closes prefix-comparison flaw on `/auth/check` |
+| `backup_acl` | Blocks vault access via backup route |
+
+Each active rule increases latency and contributes to the complaint score. Disabling a rule (`rule del <rule>`) restores performance but reopens the corresponding attack surface.
+
+The `status` command exposes critical state:
 
 ```text
 time_left=542s
@@ -1374,366 +350,204 @@ background_traffic=enabled
 game_over=no
 ```
 
-Что важно:
+Recommended defensive strategy:
 
-- `time_left` - сколько времени осталось defender-у продержаться;
-- `complaints` - жалобы, нельзя довести до 100;
-- `rules_on` - сколько правил включено;
-- `cipher_shift` - текущий ROT-сдвиг vault-а.
+1. Read `generated_service.cpp` immediately to learn seed-specific parameters.
+2. Monitor `clients` and `logs`; correlate endpoint sequences with rising `PROG`.
+3. Apply *targeted* rules aligned to observed attacker progress—not blanket hardening.
+4. Ban only after `inspect`; false bans accelerate complaint accumulation.
+5. Rotate `cipher` if the attacker likely holds an encrypted blob.
 
-### `clients`
+---
 
-Показывает клиентскую телеметрию. В таблице намеренно нет колонки `tcp/fake` и нет HWID вида `BOT`/`HACK`, чтобы defender искал hacker-а по поведению, а не по подсказке интерфейса.
+## 8. Background Clients and Stochastic Events
 
-```powershell
-clients
-```
+### 8.1. Background Clients
 
-Колонки:
+The server spawns `--bots N` synthetic clients that:
 
-```text
-ID      actor id
-NET     нейтральный сетевой токен клиента
-HWID    нейтральный hardware-токен клиента
-REQ     сколько запросов
-ERR     сколько ошибок
-CUS     сколько custom-пакетов
-SUS     suspicion score
-PROG    прогресс по exploit-chain
-LAST    сколько секунд назад была активность
-```
+- Issue routine standard requests;
+- Occasionally emit errors;
+- Sometimes send custom packets and bursts;
+- Possess unique IDs, IPs, and hardware IDs;
+- May appear superficially suspicious.
 
-На что смотреть:
+Banning a background client counts as a *false ban*, sharply increasing complaints. The interface never reveals client type; failed bans are indistinguishable from successful ones except through complaint growth.
 
-- много `CUS` - клиент часто отправляет custom-пакеты;
-- много `ERR` - клиент тыкает в ошибки;
-- высокий `SUS` - клиент подозрительный;
-- высокий `PROG` - клиент уже продвинулся по цепочке взлома.
+Live bot notifications are buffered by default in `runtime/defender_tmp/events.log` and viewed with `events 20`. Legacy inline streaming remains available via `watch on`.
 
-Важно: фоновые клиенты тоже могут ошибаться, поэтому нельзя банить только по одной ошибке.
+### 8.2. Random Events
 
-### `logs [n]`
+During a match, the server may inject:
 
-Показывает последние события.
+| Event | Effect |
+|-------|--------|
+| Network jitter | Temporary latency increase |
+| Routing storm | Latency spike; complaints +4 |
+| Cache rollback | Partial attacker progress loss |
+| Instability | Additional complaint pressure |
 
-```powershell
-logs 20
-```
+These events reduce linear predictability and simulate operational noise.
 
-Пример строки:
+---
 
-```text
-[12:30:41] id=101 ip=127.0.0.1 hw=HAC...W01 mode=custom ep=/cdn/image status=OK sus+10 :: image metadata leak
-```
+## 9. Deployment
 
-Что читать:
+### 9.1. Standard LAN Session
 
-- `id=101` - кого смотреть через `inspect`;
-- `mode=custom` - кастомный пакет;
-- `ep=/cdn/image` - endpoint;
-- `sus+10` - насколько подозрительно;
-- `image metadata leak` - что произошло.
-
-Важно: обычная live-лента больше не печатается поверх ввода. Если хочешь посмотреть локально накопленные уведомления, используй:
+On the host machine:
 
 ```powershell
-events 20
+ToughHA.exe server 7777 --duration 600 --bots 12
 ```
 
-Если хочешь временно вернуть живую печать:
+Defender workstation:
 
 ```powershell
-watch on
+ToughHA.exe defender 192.168.1.10 7777
 ```
 
-Потом лучше снова выключить:
+Hacker workstation:
 
 ```powershell
-watch off
+ToughHA.exe hacker 192.168.1.10 7777
 ```
 
-### `inspect <id>`
+Replace `192.168.1.10` with the server host's LAN address. Ensure the host firewall permits inbound TCP on the chosen port.
 
-Подробно показывает одного клиента.
+### 9.2. Split Host: Server + Defender on One PC
 
 ```powershell
-inspect 101
+# Machine A — window 1
+ToughHA.exe server 7777
+
+# Machine A — window 2
+ToughHA.exe defender 127.0.0.1 7777
+
+# Machine B
+ToughHA.exe hacker <Machine-A-LAN-IP> 7777
 ```
 
-Используй перед баном.
+The defender uses loopback; the hacker connects over LAN.
 
-### `ban <id>`
-
-Банит actor-а по ID.
+### 9.3. Local Training (Single Machine)
 
 ```powershell
-ban 101
+ToughHA.exe server 7777 --duration 600 --bots 8
+ToughHA.exe defender 127.0.0.1 7777
+ToughHA.exe hacker 127.0.0.1 7777
 ```
 
-Если это hacker, defender сразу побеждает. Если это обычный фоновый клиент, это ложный бан и жалобы сильно растут.
-
-### `banhw <HWID>`
-
-Банит по hardware ID.
+### 9.4. Automated Validation
 
 ```powershell
-banhw HW-7A91C2EF
+ToughHA.exe sim
 ```
 
-Это полезно, если defender хочет банить не просто соединение, а конкретное “железо”. Используй HWID из `clients` или `inspect`; это публичный игровой токен, а не настоящий серийный номер компьютера.
+The simulation mode starts a local server, connects defender and hacker over TCP, and verifies file I/O, rules, cipher rotation, background traffic, burst packets, temporary files, the full exploit chain, and match termination.
 
-### `rules`
+---
 
-Показывает текущие правила защиты.
+## 10. Case Study: Representative Hacker Victory
+
+The following walkthrough illustrates a successful attacker path. All secrets are seed-dependent; values differ in live play.
+
+**Setup:**
 
 ```powershell
-rules
+ToughHA.exe server 7777 --duration 600 --bots 12
+ToughHA.exe defender 127.0.0.1 7777
+ToughHA.exe hacker 127.0.0.1 7777
 ```
 
-Пример:
+**Defender reconnaissance:** `status`, `clients`, `logs 10`, then `cat /srv/service/generated_service.cpp`. Defender enables `rule add media_sanitizer` cautiously.
 
-```text
-type_guard=off
-media_sanitizer=on
-auth_fullmatch=off
-backup_acl=off
-cipher_shift=9
-latency_penalty_ms=45
-```
-
-### `rule add <rule>`
-
-Включает защитное правило.
+**Hacker reconnaissance:**
 
 ```powershell
-rule add type_guard
-rule add media_sanitizer
-rule add auth_fullmatch
-rule add backup_acl
+send standard /api/help
+send standard /api/profile user_id=5
+custom /api/profile user_id=-1&debug=1
+ls tmp
+cat tmp/profile_dump_....txt
 ```
 
-Правила:
-
-```text
-type_guard       закрывает странный debug/profile слой
-media_sanitizer  чистит метаданные image-файлов
-auth_fullmatch   закрывает prefix-ошибку в auth
-backup_acl       закрывает обход vault через backup route
-```
-
-Цена: правило добавляет задержку и жалобы.
-
-### `rule del <rule>`
-
-Выключает правило.
+**Metadata extraction:**
 
 ```powershell
-rule del media_sanitizer
+custom /cdn/image asset=avatar&format=raw_frame&width=0
+meta tmp/avatar_raw_....thaimg
 ```
 
-Используй, если сервис стал слишком медленным или жалобы растут.
+**Defender observation:** elevated `CUS`, `SUS`, and `PROG` on one client; `logs 30` shows `image metadata leak`. Premature `ban <id>` risks false-ban complaints.
 
-### `cipher <0-25>`
-
-Меняет ROT-шифр vault-а.
+**Auth bypass:**
 
 ```powershell
-cipher 12
+custom /auth/check token=K1-ABCDEF::overflow
+cat tmp/auth_session_....tmp
 ```
 
-Это регенерирует service script. Может сбить hacker-а, если он уже получил старый vault blob, но тоже добавляет жалобы.
-
-### `ls <path>`
-
-Список файлов на сервере через виртуальную Linux-подобную файловую систему.
+**Vault exfiltration and decryption:**
 
 ```powershell
-ls /srv
-ls /srv/service
-ls /srv/db
-ls /srv/config
-ls /srv/logs
+custom /vault/read session=S2-...&route=backup_...
+rot AXXC-... -9
 ```
 
-### `cat <path>`
-
-Читает файл сервера.
+**Terminal action:**
 
 ```powershell
-cat /srv/service/generated_service.cpp
-cat /srv/db/main.db
-cat /srv/config/firewall.rules
-cat /srv/logs/activity.log
-cat /srv/public/readme.txt
+custom /core/export password=ROOT-...
 ```
 
-Самый важный файл:
+**Counterfactual defender responses** that would have stopped this chain:
+
+- `rule add media_sanitizer` before stage 2;
+- `rule add auth_fullmatch` before stage 3;
+- `rule add backup_acl` before stage 4;
+- Correct `ban <id>` after `inspect` confirmed exploit-chain progress;
+- `cipher <n>` after vault blob capture.
+
+---
+
+## 11. Conclusion
+
+ToughHA combines procedural vulnerability generation, asymmetric information, policy trade-offs, and noisy background traffic into a self-contained LAN training game. Its single-binary deployment, seed-based reproducibility, and built-in simulation mode make it suitable for instructional labs, competitive pair play, and regression testing. Future extensions may include additional vulnerability classes, team modes, and formal scoring metrics for classroom assessment.
+
+---
+
+## Appendix A — Hacker Command Reference
 
 ```powershell
-cat /srv/service/generated_service.cpp
-```
-
-В нем defender видит сгенерированную C++-логику сервиса и может понять, какие ошибки hacker пытается использовать.
-
-### `tail service`
-
-Показывает конец service script.
-
-```powershell
-tail service
-```
-
-Удобно, если весь файл слишком длинный.
-
-### `batch <file>`
-
-Как и у hacker-а, можно выполнять локальный файл команд.
-
-```powershell
-batch defend.txt
-```
-
-Пример `defend.txt`:
-
-```text
-status
-logs 20
-clients
-sleep 500
-rules
-```
-
-### `quit`
-
-Выход.
-
-```powershell
+help
+send standard <endpoint> [k=v ...]
+send custom <endpoint> [k=v ...]
+custom <endpoint> [k=v&x=y ...]
+std <endpoint> [k=v ...]
+burst <count> <standard|custom> <endpoint> [payload]
+ls tmp
+cat tmp/<file>
+meta tmp/<file>
+inbox
+events [n]
+events clear
+watch on|off
+rot <text> <shift>
+batch <file>
 quit
 ```
 
-## Как начать играть за defender-а
-
-### Шаг 1. Проверить статус
+**Payload syntax:** space-separated `key=value` pairs in `send standard`, or `&`-joined pairs in `custom`. Example equivalence:
 
 ```powershell
-status
+send standard /cdn/image asset=logo format=jpg width=128
+# internally: asset=logo&format=jpg&width=128
 ```
 
-Смотри таймер и жалобы.
+**Batch files** support `sleep <ms>` delays and `#` / `rem` comments.
 
-### Шаг 2. Открыть сервис
-
-```powershell
-cat /srv/service/generated_service.cpp
-```
-
-Ищи странные места:
-
-```text
-kDebugFlagName
-kDebugFlagValue
-kBadUserId
-kImageMagic
-kBackupRoute
-kStage1Key
-kStage2Token
-kVaultPassword
-kCipherShift
-```
-
-Это то, вокруг чего строится атака.
-
-### Шаг 3. Смотреть клиентов
-
-```powershell
-clients
-logs 20
-```
-
-Ищи клиента, который:
-
-- часто использует `custom`;
-- ходит по цепочке `/api/profile -> /cdn/image -> /auth/check -> /vault/read`;
-- получает `metadata leak`, `auth prefix leak`, `vault encrypted password leak`;
-- имеет растущий `PROG`.
-
-### Шаг 4. Проверять подозреваемого
-
-```powershell
-inspect <id>
-```
-
-Если видно, что это настоящий hacker, бань:
-
-```powershell
-ban <id>
-```
-
-### Шаг 5. Закрывать конкретные слои
-
-Если hacker ковыряет `/api/profile`:
-
-```powershell
-rule add type_guard
-```
-
-Если hacker дошел до image metadata:
-
-```powershell
-rule add media_sanitizer
-```
-
-Если hacker пробует auth tokens:
-
-```powershell
-rule add auth_fullmatch
-```
-
-Если hacker дошел до vault:
-
-```powershell
-rule add backup_acl
-```
-
-Если hacker уже получил encrypted blob:
-
-```powershell
-cipher 17
-```
-
-Но помни: каждое правило ухудшает сервис. Defender играет не только в “закрыть все”, но и в баланс.
-
-## Почему hacker иногда получает ERR
-
-`ERR` - это не всегда плохо. Ошибка тоже дает информацию.
-
-Примеры:
-
-```text
-ERR wrong type: user_id must be int
-```
-
-Вывод: `user_id` должен быть числом.
-
-```text
-ERR format and width are required
-```
-
-Вывод: `/cdn/image` требует `format` и `width`.
-
-```text
-DENY auth_fullmatch: token must match exactly
-```
-
-Вывод: defender включил правило `auth_fullmatch`, prefix-баг закрыт.
-
-```text
-DENY backup_acl: backup route requires admin console
-```
-
-Вывод: defender закрыл vault route.
-
-## Мини-шпаргалка hacker-а
+**Quick cheat sheet:**
 
 ```powershell
 send standard /api/help
@@ -1750,7 +564,46 @@ rot <encrypted-data> -<cipher-number>
 custom /core/export password=<decrypted-password>
 ```
 
-## Мини-шпаргалка defender-а
+---
+
+## Appendix B — Defender Command Reference
+
+```powershell
+help
+status
+clients
+logs [n]
+inspect <id>
+ban <id>
+banhw <HWID>
+rules
+rule add type_guard|media_sanitizer|auth_fullmatch|backup_acl
+rule del <rule>
+cipher <0-25>
+ls /srv[/...]
+cat /srv/<path>
+tail service
+events [n]
+watch on|off
+batch <file>
+quit
+```
+
+**Client telemetry columns:**
+
+| Column | Meaning |
+|--------|---------|
+| `ID` | Actor identifier |
+| `NET` | Neutral network token |
+| `HWID` | Neutral hardware token |
+| `REQ` | Total requests |
+| `ERR` | Error count |
+| `CUS` | Custom-packet count |
+| `SUS` | Suspicion score |
+| `PROG` | Exploit-chain progress |
+| `LAST` | Seconds since last activity |
+
+**Quick cheat sheet:**
 
 ```powershell
 status
@@ -1764,22 +617,37 @@ cipher 11
 ban <id>
 ```
 
-## Что делать, если вообще непонятно
+---
 
-Для обучения запусти локальную симуляцию:
+## Appendix C — Hacker Tutorial Path
 
-```powershell
-ToughHA.exe sim
-```
+1. Verify connectivity: `send standard /api/ping client=hacker`
+2. Enumerate API: `send standard /api/help`
+3. Baseline profile: `send standard /api/profile user_id=5`
+4. Fuzz profile debug branch with varied `user_id` and flag names
+5. Read dumps: `ls tmp`, `cat tmp/<file>`
+6. Follow hints to `/cdn/image`; extract `stage1=` via `meta`
+7. Exploit `/auth/check` prefix flaw
+8. Read vault: `/vault/read` with session and route
+9. Decrypt: `rot <data> -<cipher>`
+10. Export: `custom /core/export password=<plain>`
 
-Она сама проходит партию и проверяет, что механики работают.
+---
 
-Для ручной тренировки на одном ПК можно открыть три окна:
+## Appendix D — Defender Tutorial Path
 
-```powershell
-ToughHA.exe server 7777 --duration 600 --bots 8
-ToughHA.exe defender 127.0.0.1 7777
-ToughHA.exe hacker 127.0.0.1 7777
-```
+1. Assess match state: `status`
+2. Static analysis: `cat /srv/service/generated_service.cpp`
+3. Monitor: `clients`, `logs 20`
+4. Investigate high-`PROG` clients: `inspect <id>`
+5. Ban confirmed attacker: `ban <id>`
+6. Otherwise, apply stage-aligned rules and consider `cipher` rotation
+7. Balance security against complaints—avoid indiscriminate rule activation and false bans
 
-Сначала играй за hacker-а по учебному маршруту из этого файла. Потом открой defender-а и посмотри, как твои действия выглядели в `logs` и `clients`.
+---
+
+## License
+
+MIT License. Copyright (c) 2026 empty?
+
+See [LICENSE](LICENSE) for full terms.
